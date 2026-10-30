@@ -151,6 +151,7 @@ min=-1 max=87
 - 首帧日志有 `Extrapolator is still initializing.`，随后正常进入 scan matching，这是初始化阶段的预期日志。
 - 有一次退化分析点数不足警告，见上文；不影响后续处理。
 - 两次实验均通过 Ctrl-C 正常停止，Cartographer 报告关闭 `/scan` subscriber、完成 trajectory、运行 final optimization，两个进程 cleanly finish。launch 日志中的 warning 仅为用户中断。
+- 本次是两次受控的部分 bag 回放（约几十秒到一分钟），用于验证运行链路和输出；没有等待 5 分 44 秒 bag 全部播放结束。因此本报告不声称完成全程走廊往返、全程退化统计或最终地图质量评估。
 
 ## 验收结论与限制
 
