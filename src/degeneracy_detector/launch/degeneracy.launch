@@ -1,0 +1,9 @@
+<launch>
+
+    <node
+        pkg="degeneracy_detector"
+        type="degeneracy_detector_node"
+        name="degeneracy_detector"
+        output="screen"/>
+
+</launch>

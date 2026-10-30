@@ -1,0 +1,646 @@
+#include "adaptive_weight.h"
+
+AdaptiveWeightCalculator::
+AdaptiveWeightCalculator()
+{
+    translation_max_=10.0;
+
+    rotation_weight_=40.0;
+
+    gain_=0.03;
+}
+
+void AdaptiveWeightCalculator::
+setMaximumTranslation(double w)
+{
+    translation_max_=w;
+}
+
+void AdaptiveWeightCalculator::
+setRotationWeight(double w)
+{
+    rotation_weight_=w;
+}
+
+void AdaptiveWeightCalculator::
+setGain(double k)
+{
+    gain_=k;
+}
+
+WeightResult
+AdaptiveWeightCalculator::
+calculate(double score) const
+{
+    WeightResult result;
+
+    result.translation_weight=
+            translation_max_/
+            (1.0+gain_*score);
+
+    result.rotation_weight=
+            rotation_weight_;
+
+    return result;
+}
+
+#include "covariance.h"
+
+#include <Eigen/Eigenvalues>
+
+bool CovarianceCalculator::compute(
+        const ScanFrame& frame,
+        CovarianceResult& result) const
+{
+    // 至少需要两个点
+    if(frame.points.size() < 2)
+    {
+        return false;
+    }
+
+    //----------------------------------------------------------------------
+    // Step 1 : 计算质心
+    //----------------------------------------------------------------------
+
+    result.centroid.setZero();
+
+    for(const auto& point : frame.points)
+    {
+        result.centroid += point;
+    }
+
+    result.centroid /= static_cast<double>(frame.points.size());
+
+    //----------------------------------------------------------------------
+    // Step 2 : 计算协方差矩阵
+    //----------------------------------------------------------------------
+
+    result.covariance.setZero();
+
+    for(const auto& point : frame.points)
+    {
+        Eigen::Vector2d diff = point - result.centroid;
+
+        result.covariance += diff * diff.transpose();
+    }
+
+    result.covariance /=
+            static_cast<double>(frame.points.size() - 1);
+
+    //----------------------------------------------------------------------
+    // Step 3 : PCA（特征值分解）
+    //----------------------------------------------------------------------
+
+    Eigen::SelfAdjointEigenSolver<Eigen::Matrix2d> solver(
+            result.covariance);
+
+    if(solver.info() != Eigen::Success)
+    {
+        return false;
+    }
+
+    result.eigen_values =
+            solver.eigenvalues();
+
+    result.eigen_vectors =
+            solver.eigenvectors();
+
+    return true;
+}#include "degeneracy_analyzer.h"
+
+#include <cmath>
+
+DegeneracyAnalyzer::DegeneracyAnalyzer()
+{
+    threshold_ = 100.0;
+}
+
+void DegeneracyAnalyzer::setThreshold(
+        double threshold)
+{
+    threshold_ = threshold;
+}
+
+double DegeneracyAnalyzer::threshold() const
+{
+    return threshold_;
+}
+
+bool DegeneracyAnalyzer::analyze(
+        const CovarianceResult& covariance,
+        DegeneracyResult& result) const
+{
+    double lambda_min =
+            covariance.eigen_values(0);
+
+    double lambda_max =
+            covariance.eigen_values(1);
+
+    // 防止除零
+    if(lambda_min < 1e-8)
+    {
+        return false;
+    }
+
+    result.lambda_min = lambda_min;#include <ros/ros.h>
+
+#include <sensor_msgs/LaserScan.h>
+
+#include "degeneracy_detector/Degeneracy.h"
+
+#include "covariance.h"
+#include "point_processor.h"
+#include "sliding_window.h"
+#include "degeneracy_analyzer.h"
+#include "evaluation.h"
+#include "adaptive_weight.h"
+#include "degeneracy_engine.h"
+
+#include <Eigen/Core>
+#include <vector>
+#include <cmath>
+
+class DegeneracyDetector
+{
+
+public:
+
+    DegeneracyDetector()
+	{
+	    scan_sub_=nh_.subscribe(
+		    "/scan",
+		    1,
+		    &DegeneracyDetector::scanCallback,
+		    this);
+
+	    degeneracy_pub_=nh_.advertise<
+		    degeneracy_detector::Degeneracy>(
+		    "/degeneracy",
+		    1);
+
+	    if(!evaluation_.open(
+		    "/home/sj/degeneracy.csv"))
+	    {
+		ROS_ERROR("Open csv failed.");
+	    }
+
+	    ROS_INFO("Degeneracy Detector Started.");
+	}
+
+private:
+
+    int frame_id_=0;
+
+    ros::NodeHandle nh_;
+
+    ros::Subscriber scan_sub_;
+
+    ros::Publisher degeneracy_pub_;
+    
+    Evaluation evaluation_;
+    
+    DegeneracyEngine engine_;
+
+    void scanCallback(
+        const sensor_msgs::LaserScan::ConstPtr& scan)
+	{
+	    frame_id_++;
+
+	    //----------------------------------
+	    // Engine Output
+	    //----------------------------------
+
+	    ScanFrame merged_frame;
+
+	    CovarianceResult covariance_result;
+
+	    DegeneracyResult degeneracy_result;
+
+	    WeightResult weight_result;
+
+	    if(!engine_.update(
+		    *scan,
+		    merged_frame,
+		    covariance_result,
+		    degeneracy_result,
+		    weight_result))
+	    {
+		return;
+	    }
+
+	    //----------------------------------
+	    // ROS Message
+	    //----------------------------------
+
+	    degeneracy_detector::Degeneracy msg;
+
+	    msg.header=scan->header;
+
+	    msg.degenerate=
+		    degeneracy_result.degenerate;
+
+	    msg.score=
+		    degeneracy_result.score;
+
+	    msg.lambda_max=
+		    degeneracy_result.lambda_max;
+
+	    msg.lambda_min=
+		    degeneracy_result.lambda_min;
+
+	    msg.direction.x=
+		    degeneracy_result.direction.x();
+
+	    msg.direction.y=
+		    degeneracy_result.direction.y();
+
+	    msg.direction.z=0;
+
+	    degeneracy_pub_.publish(msg);
+
+	    //----------------------------------
+	    // CSV
+	    //----------------------------------
+
+	    evaluation_.save(
+		    frame_id_,
+		    merged_frame.points.size(),
+		    merged_frame,
+		    degeneracy_result,
+		    covariance_result,
+		    weight_result);
+
+	    //----------------------------------
+	    // Console
+	    //----------------------------------
+
+	    if(frame_id_%30==0)
+	    {
+		ROS_INFO_STREAM("==========================");
+
+		ROS_INFO_STREAM(
+		    "Frame : "
+		    <<frame_id_);
+
+		ROS_INFO_STREAM(
+		    "Point : "
+		    <<merged_frame.points.size());
+
+		ROS_INFO_STREAM(
+		    "Score : "
+		    <<degeneracy_result.score);
+
+		ROS_INFO_STREAM(
+		    "Lambda : "
+		    <<degeneracy_result.lambda_max
+		    <<" "
+		    <<degeneracy_result.lambda_min);
+
+		ROS_INFO_STREAM(
+		    "Weight : "
+		    <<weight_result.translation_weight
+		    <<" "
+		    <<weight_result.rotation_weight);
+	    }
+	}
+
+};
+
+int main(int argc,char** argv)
+{
+
+    ros::init(argc,argv,"degeneracy_detector");
+
+    DegeneracyDetector detector;
+
+    ros::spin();
+
+}
+
+
+    result.lambda_max = lambda_max;
+
+    result.score =
+            lambda_max /
+            lambda_min;
+
+    result.direction =
+            covariance.eigen_vectors.col(1);
+
+    result.degenerate =
+            (result.score > threshold_);
+
+    return true;
+}
+
+#include "degeneracy_engine.h"
+
+DegeneracyEngine::DegeneracyEngine()
+{
+}
+
+bool DegeneracyEngine::update(
+        const sensor_msgs::LaserScan& scan,
+        ScanFrame& merged_frame,
+        CovarianceResult& covariance_result,
+        DegeneracyResult& degeneracy_result,
+        WeightResult& weight_result)
+{
+    //----------------------------------
+    // Step1
+    //----------------------------------
+    if(!point_processor_.convertLaserScan(scan,
+                                          current_frame_))
+    {
+        return false;
+    }
+
+    //----------------------------------
+    // Step2
+    //----------------------------------
+    sliding_window_.addFrame(current_frame_);
+
+    merged_frame = sliding_window_.mergedFrame();
+
+    //----------------------------------
+    // Step3
+    //----------------------------------
+    if(!covariance_calculator_.compute(
+            merged_frame,
+            covariance_result))
+    {
+        return false;
+    }
+
+    //----------------------------------
+    // Step4
+    //----------------------------------
+    if(!analyzer_.analyze(
+            covariance_result,
+            degeneracy_result))
+    {
+        return false;
+    }
+
+    //----------------------------------
+    // Step5
+    //----------------------------------
+    weight_result =
+            weight_calculator_.calculate(
+                    degeneracy_result.score);
+
+    return true;
+}
+
+#include "evaluation.h"
+
+#include <iomanip>
+
+Evaluation::Evaluation()
+{
+
+}
+
+Evaluation::~Evaluation()
+{
+    if(file_.is_open())
+    {
+        file_.close();
+    }
+}
+
+bool Evaluation::open(
+        const std::string& filename)
+{
+    file_.open(filename);
+
+    if(!file_.is_open())
+    {
+        return false;
+    }
+
+    file_
+
+	<<"frame,"
+
+	<<"time,"
+
+	<<"point_num,"
+
+	<<"cov_xx,"
+
+	<<"cov_xy,"
+
+	<<"cov_yy,"
+
+	<<"lambda_max,"
+
+	<<"lambda_min,"
+
+	<<"score,"
+
+	<<"translation_weight,"
+
+	<<"rotation_weight,"
+
+	<<"direction_x,"
+
+	<<"direction_y,"
+
+	<<"degenerate"
+
+	<<std::endl;
+
+    return true;
+}
+
+void Evaluation::save(
+        int frame_id,
+        int point_num,
+        const ScanFrame& frame,
+        const DegeneracyResult& degeneracy,
+        const CovarianceResult& covariance,
+        const WeightResult& weight)
+{
+    if(!file_.is_open())
+    {
+        return;
+    }
+
+    file_
+
+	<<frame_id<<","
+
+	<<frame.stamp.toSec()<<","
+
+	<<point_num<<","
+
+	<<covariance.covariance(0,0)<<","
+
+	<<covariance.covariance(0,1)<<","
+
+	<<covariance.covariance(1,1)<<","
+
+	<<degeneracy.lambda_max<<","
+
+	<<degeneracy.lambda_min<<","
+
+	<<degeneracy.score<<","
+
+	<<weight.translation_weight<<","
+
+	<<weight.rotation_weight<<","
+
+	<<degeneracy.direction.x()<<","
+
+	<<degeneracy.direction.y()<<","
+
+	<<degeneracy.degenerate
+
+	<<std::endl;
+}
+
+#include "point_processor.h"
+
+#include <cmath>
+
+PointProcessor::PointProcessor()
+{
+    min_range_ = 0.10;
+    max_range_ = 30.0;
+}
+
+void PointProcessor::setRangeLimit(
+        double min_range,
+        double max_range)
+{
+    min_range_ = min_range;
+    max_range_ = max_range;
+}
+
+double PointProcessor::minRange() const
+{
+    return min_range_;
+}
+
+double PointProcessor::maxRange() const
+{
+    return max_range_;
+}
+
+bool PointProcessor::convertLaserScan(
+        const sensor_msgs::LaserScan& scan,
+        ScanFrame& frame)
+{
+    // 清空上一帧数据
+    frame.points.clear();
+
+    // 保存时间戳
+    frame.stamp = scan.header.stamp;
+
+    // 预分配空间，减少vector扩容次数
+    frame.points.reserve(scan.ranges.size());
+
+    for(size_t i = 0; i < scan.ranges.size(); ++i)
+    {
+        double range = scan.ranges[i];
+
+        // NaN过滤
+        if(std::isnan(range))
+            continue;
+
+        // Inf过滤
+        if(std::isinf(range))
+            continue;
+
+        // 最小距离过滤
+        if(range < min_range_)
+            continue;
+
+        // 最大距离过滤
+        if(range > max_range_)
+            continue;
+
+        double angle =
+                scan.angle_min +
+                i * scan.angle_increment;
+
+        double x = range * std::cos(angle);
+
+        double y = range * std::sin(angle);
+
+        frame.points.emplace_back(x, y);
+    }
+
+    // 点数过少直接认为失败
+    if(frame.points.size() < 10)
+        return false;
+
+    return true;
+}
+
+#include "sliding_window.h"
+
+SlidingWindow::SlidingWindow(size_t window_size)
+    : window_size_(window_size)
+{
+}
+
+void SlidingWindow::addFrame(const ScanFrame& frame)
+{
+    window_.push_back(frame);
+
+    while(window_.size() > window_size_)
+    {
+        window_.pop_front();
+    }
+
+    rebuildMergedFrame();
+}
+
+void SlidingWindow::rebuildMergedFrame()
+{
+    merged_frame_.points.clear();
+
+    if(window_.empty())
+        return;
+
+    // 使用最新帧时间戳
+    merged_frame_.stamp = window_.back().stamp;
+
+    // 统计总点数，提前分配内存
+    size_t total_points = 0;
+
+    for(const auto& frame : window_)
+    {
+        total_points += frame.points.size();
+    }
+
+    merged_frame_.points.reserve(total_points);
+
+    // 合并点云
+    for(const auto& frame : window_)
+    {
+        merged_frame_.points.insert(
+                merged_frame_.points.end(),
+                frame.points.begin(),
+                frame.points.end());
+    }
+}
+
+const ScanFrame& SlidingWindow::mergedFrame() const
+{
+    return merged_frame_;
+}
+
+size_t SlidingWindow::frameCount() const
+{
+    return window_.size();
+}
+
+size_t SlidingWindow::windowSize() const
+{
+    return window_size_;
+}
+
+

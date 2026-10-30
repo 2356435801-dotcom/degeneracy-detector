@@ -1,0 +1,19 @@
+# ROS 2 编译和运行产生的文件/文件夹
+build/
+install/
+log/
+
+# 编译生成的文件
+*.o
+*.so
+*.a
+
+# Python 编译缓存
+__pycache__/
+*.pyc
+
+# IDE 和 编辑器配置
+.vscode/
+.idea/
+*.swp
+*~

@@ -1,0 +1,392 @@
+#ifndef ADAPTIVE_WEIGHT_H
+#define ADAPTIVE_WEIGHT_H
+
+struct WeightResult
+{
+    double translation_weight;
+
+    double rotation_weight;
+};
+
+class AdaptiveWeightCalculator
+{
+public:
+
+    AdaptiveWeightCalculator();
+
+    WeightResult calculate(double score) const;
+
+    void setMaximumTranslation(double w);
+
+    void setRotationWeight(double w);
+
+    void setGain(double k);
+
+private:
+
+    double translation_max_;
+
+    double rotation_weight_;
+
+    double gain_;
+};
+
+#endif
+
+#ifndef COVARIANCE_H
+#define COVARIANCE_H
+
+#include <Eigen/Dense>
+
+#include "data_type.h"
+
+/**
+ * @brief 协方差计算器
+ *
+ * 输入：
+ *      ScanFrame
+ *
+ * 输出：
+ *      CovarianceResult
+ *
+ * 仅负责数学计算，不保存任何状态。
+ */
+class CovarianceCalculator
+{
+public:
+
+    CovarianceCalculator() = default;
+
+    /**
+     * @brief 计算点云协方差及PCA
+     *
+     * @param frame 输入点云
+     * @param result 输出结果
+     * @return true 成功
+     * @return false 点数不足
+     */
+    bool compute(
+            const ScanFrame& frame,
+            CovarianceResult& result) const;
+};
+
+#endif
+
+#ifndef DATA_TYPE_H
+#define DATA_TYPE_H
+
+#include <ros/ros.h>
+#include <Eigen/Dense>
+#include <vector>
+
+/**
+ * 一帧激光扫描数据
+ */
+struct ScanFrame
+{
+    /// 时间戳
+    ros::Time stamp;
+
+    /// 二维点云
+    std::vector<Eigen::Vector2d> points;
+};
+
+/**
+ * 协方差计算结果
+ */
+struct CovarianceResult
+{
+    /// 点云质心
+    Eigen::Vector2d centroid =
+        Eigen::Vector2d::Zero();
+
+    /// 协方差矩阵
+    Eigen::Matrix2d covariance =
+        Eigen::Matrix2d::Zero();
+
+    /// 特征值
+    Eigen::Vector2d eigen_values =
+        Eigen::Vector2d::Zero();
+
+    /// 特征向量
+    Eigen::Matrix2d eigen_vectors =
+        Eigen::Matrix2d::Identity();
+};
+
+/**
+ * 退化分析结果
+ */
+struct DegeneracyResult
+{
+    /// 是否退化
+    bool degenerate = false;
+
+    /// 条件数
+    double score = 0.0;
+
+    /// 最大特征值
+    double lambda_max = 0.0;
+
+    /// 最小特征值
+    double lambda_min = 0.0;
+
+    /// 退化方向
+    Eigen::Vector2d direction =
+        Eigen::Vector2d::Zero();
+};
+
+#endif
+
+#ifndef DEGENERACY_ANALYZER_H
+#define DEGENERACY_ANALYZER_H
+
+#include "data_type.h"
+
+/**
+ * @brief 退化分析器
+ *
+ * 输入：
+ *      CovarianceResult
+ *
+ * 输出：
+ *      DegeneracyResult
+ *
+ * 功能：
+ *      1. 条件数计算
+ *      2. 退化判定
+ *      3. 主方向计算
+ */
+class DegeneracyAnalyzer
+{
+public:
+
+    DegeneracyAnalyzer();
+
+    /**
+     * @brief 设置退化阈值
+     */
+    void setThreshold(double threshold);
+
+    /**
+     * @brief 获取阈值
+     */
+    double threshold() const;
+
+    /**
+     * @brief 退化分析
+     */
+    bool analyze(
+            const CovarianceResult& covariance,
+            DegeneracyResult& result) const;
+
+private:
+
+    double threshold_;
+};
+
+#endif
+
+#ifndef DEGENERACY_ENGINE_H
+#define DEGENERACY_ENGINE_H
+
+#include "adaptive_weight.h"
+#include "covariance.h"
+#include "data_type.h"
+#include "degeneracy_analyzer.h"
+#include "point_processor.h"
+#include "sliding_window.h"
+
+#include <sensor_msgs/LaserScan.h>
+
+class DegeneracyEngine
+{
+public:
+
+    DegeneracyEngine();
+
+    /**
+     * @brief 输入LaserScan，完成整个退化检测流程
+     *
+     * @param scan LaserScan
+     * @param degeneracy_result 输出退化结果
+     * @param weight_result 输出自适应权重
+     * @return true 成功
+     * @return false 本帧无法计算
+     */
+    bool update(
+	    const std::vector<Eigen::Vector2d>& points,
+	    ScanFrame& merged_frame,
+	    CovarianceResult& covariance_result,
+	    DegeneracyResult& degeneracy_result,
+	    WeightResult& weight_result);
+
+private:
+
+    PointProcessor point_processor_;
+
+    SlidingWindow sliding_window_;
+
+    CovarianceCalculator covariance_calculator_;
+
+    DegeneracyAnalyzer analyzer_;
+
+    AdaptiveWeightCalculator weight_calculator_;
+
+    ScanFrame current_frame_;
+};
+
+#endif
+
+#ifndef EVALUATION_H
+#define EVALUATION_H
+
+#include <fstream>
+#include <string>
+
+#include "data_type.h"
+#include "adaptive_weight.h"
+
+class Evaluation
+{
+public:
+
+    Evaluation();
+
+    ~Evaluation();
+
+    bool open(const std::string& filename);
+
+    void save(
+            int frame_id,
+            int point_num,
+            const ScanFrame& frame,
+            const DegeneracyResult& degeneracy,
+            const CovarianceResult& covariance,
+            const WeightResult& weight);
+
+private:
+
+    std::ofstream file_;
+};
+
+#endif
+
+#ifndef POINT_PROCESSOR_H
+#define POINT_PROCESSOR_H
+
+#include <sensor_msgs/LaserScan.h>
+#include <Eigen/Dense>
+#include <vector>
+
+#include "data_type.h"
+
+/**
+ * @brief 点云预处理模块
+ *
+ * 功能：
+ * 1. LaserScan → ScanFrame
+ * 2. NaN过滤
+ * 3. Inf过滤
+ * 4. 距离过滤
+ * 5. 后续可扩展Voxel滤波、离群点滤波等
+ */
+class PointProcessor
+{
+public:
+
+    PointProcessor();
+
+    /**
+     * @brief LaserScan转换为ScanFrame
+     *
+     * @param scan 原始LaserScan
+     * @param frame 输出ScanFrame
+     * @return 是否成功
+     */
+    bool convertLaserScan(
+            const sensor_msgs::LaserScan& scan,
+            ScanFrame& frame);
+
+    /**
+     * @brief 设置距离过滤范围
+     */
+    void setRangeLimit(
+            double min_range,
+            double max_range);
+
+    /**
+     * @brief 获取最小距离
+     */
+    double minRange() const;
+
+    /**
+     * @brief 获取最大距离
+     */
+    double maxRange() const;
+
+private:
+
+    double min_range_;
+
+    double max_range_;
+};
+
+#endif
+
+#ifndef SLIDING_WINDOW_H
+#define SLIDING_WINDOW_H
+
+#include <deque>
+
+#include "data_type.h"
+
+/**
+ * @brief 固定长度滑动窗口
+ *
+ * 功能：
+ * 1. 保存最近N帧ScanFrame
+ * 2. 自动维护融合点云
+ * 3. 零拷贝获取MergedFrame
+ */
+class SlidingWindow
+{
+public:
+
+    explicit SlidingWindow(size_t window_size = 20);
+
+    /**
+     * @brief 添加一帧数据
+     */
+    void addFrame(const ScanFrame& frame);
+
+    /**
+     * @brief 获取融合后的窗口点云
+     */
+    const ScanFrame& mergedFrame() const;
+
+    /**
+     * @brief 当前窗口帧数
+     */
+    size_t frameCount() const;
+
+    /**
+     * @brief 窗口大小
+     */
+    size_t windowSize() const;
+
+private:
+
+    size_t window_size_;
+
+    std::deque<ScanFrame> window_;
+
+    /// 融合后的窗口点云
+    ScanFrame merged_frame_;
+
+    /// 重建融合点云
+    void rebuildMergedFrame();
+};
+
+#endif
+
+
