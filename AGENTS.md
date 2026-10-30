@@ -12,7 +12,7 @@ These instructions apply to work in this repository. Follow any more specific us
 
 ## Required End-of-Task Workflow
 
-After completing each full development task:
+After completing each full development task or read-only analysis task:
 
 1. Summarize the requested outcome and inspect every changed file.
 2. Review `git diff` and `git diff --check`; distinguish changes that existed before this task from changes made for it.
@@ -23,6 +23,8 @@ After completing each full development task:
 7. Before pushing, confirm the current branch and upstream, inspect whether the remote branch has advanced, and confirm the staged/committed task scope. Use the configured GitHub remote and the current branch only.
 8. Push with a normal, non-forcing push. If authentication, branch protection, remote divergence, or another server condition prevents a safe push, stop and report it. Do not change the remote, rewrite remote history, delete branches, create a pull request, or bypass protection.
 9. Report the commit, branch, remote, push result, tests, and outstanding issues.
+
+When the relevant build and tests pass, carry out the scoped commit and normal push automatically as part of this workflow; do not wait for a separate user request. Read-only analysis tasks still receive a log entry, with build or test execution recorded as not applicable when appropriate.
 
 Do not include pre-existing or unrelated work in a task commit. Do not use `git add -A` or `git add .` when unrelated work is present. If a task changes a file that also contains earlier user changes, inspect and separate the task's hunks carefully; if they cannot be separated reliably, leave the commit/push pending and report why.
 
