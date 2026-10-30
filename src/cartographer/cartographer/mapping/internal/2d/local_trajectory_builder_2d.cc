@@ -64,7 +64,9 @@ LocalTrajectoryBuilder2D::TransformToGravityAlignedFrameAndFilter(
 
 std::unique_ptr<transform::Rigid2d> LocalTrajectoryBuilder2D::ScanMatch(
     const common::Time time, const transform::Rigid2d& pose_prediction,
-    const sensor::PointCloud& filtered_gravity_aligned_point_cloud) {
+    const sensor::PointCloud& filtered_gravity_aligned_point_cloud,
+    scan_matching::CeresScanMatcher2D::LocalObservabilityDiagnostics*
+        diagnostics) {
   if (active_submaps_.submaps().empty()) {
     return absl::make_unique<transform::Rigid2d>(pose_prediction);
   }
@@ -86,7 +88,7 @@ std::unique_ptr<transform::Rigid2d> LocalTrajectoryBuilder2D::ScanMatch(
   ceres_scan_matcher_.Match(pose_prediction.translation(), initial_ceres_pose,
                             filtered_gravity_aligned_point_cloud,
                             *matching_submap->grid(), pose_observation.get(),
-                            &summary);
+                            &summary, diagnostics);
   if (pose_observation) {
     kCeresScanMatcherCostMetric->Observe(summary.final_cost);
     const double residual_distance =
@@ -233,8 +235,50 @@ LocalTrajectoryBuilder2D::AddAccumulatedRangeData(
   }
 
   // local map frame <- gravity-aligned frame
+  scan_matching::CeresScanMatcher2D::LocalObservabilityDiagnostics
+      observability_diagnostics;
+  const bool collect_observability =
+      options_.ceres_scan_matcher_options()
+          .enable_local_observability_diagnostics();
   std::unique_ptr<transform::Rigid2d> pose_estimate_2d =
-      ScanMatch(time, pose_prediction, filtered_gravity_aligned_point_cloud);
+      ScanMatch(time, pose_prediction, filtered_gravity_aligned_point_cloud,
+                collect_observability ? &observability_diagnostics : nullptr);
+  if (collect_observability) {
+    if (observability_diagnostics.valid) {
+      const auto& measurement = observability_diagnostics.measurement;
+      const auto& objective = observability_diagnostics.objective;
+      LOG(INFO) << "2D local observability: time=" << time
+                << " scale_length="
+                << observability_diagnostics.characteristic_length
+                << " measurement_residuals=" << measurement.num_residuals
+                << " parameters=" << measurement.num_parameters
+                << " measurement_eigenvalues=(" << measurement.eigenvalues(0)
+                << "," << measurement.eigenvalues(1) << ","
+                << measurement.eigenvalues(2) << ")"
+                << " measurement_condition=" << measurement.condition_number
+                << " weak_direction=(" << measurement.weak_direction(0) << ","
+                << measurement.weak_direction(1) << ","
+                << measurement.weak_direction(2) << ")"
+                << " objective_residuals=" << objective.num_residuals
+                << " objective_eigenvalues=(" << objective.eigenvalues(0)
+                << "," << objective.eigenvalues(1) << ","
+                << objective.eigenvalues(2) << ")"
+                << " objective_condition=" << objective.condition_number
+                << " scan_match_ms="
+                << observability_diagnostics.scan_match_duration_ms
+                << " diagnostic_ms="
+                << observability_diagnostics.diagnostic_duration_ms
+                << " valid=true";
+    } else {
+      LOG(WARNING) << "2D local observability unavailable: time=" << time
+                   << " reason="
+                   << (observability_diagnostics.valid
+                           ? "pca_metric_unavailable"
+                           : (observability_diagnostics.failure_reason.empty()
+                                  ? "no_active_submap_or_match_result"
+                                  : observability_diagnostics.failure_reason));
+    }
+  }
   if (pose_estimate_2d == nullptr) {
     LOG(WARNING) << "Scan matching failed.";
     return nullptr;

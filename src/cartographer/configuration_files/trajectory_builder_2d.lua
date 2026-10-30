@@ -46,6 +46,7 @@ TRAJECTORY_BUILDER_2D = {
     occupied_space_weight = 1.,
     translation_weight = 10.,
     rotation_weight = 40.,
+    enable_local_observability_diagnostics = false,
     ceres_solver_options = {
       use_nonmonotonic_steps = false,
       max_num_iterations = 20,

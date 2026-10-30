@@ -94,7 +94,9 @@ class LocalTrajectoryBuilder2D {
   // observed pose, or nullptr on failure.
   std::unique_ptr<transform::Rigid2d> ScanMatch(
       common::Time time, const transform::Rigid2d& pose_prediction,
-      const sensor::PointCloud& filtered_gravity_aligned_point_cloud);
+      const sensor::PointCloud& filtered_gravity_aligned_point_cloud,
+      scan_matching::CeresScanMatcher2D::LocalObservabilityDiagnostics*
+          diagnostics);
 
   // Lazily constructs a PoseExtrapolator.
   void InitializeExtrapolator(common::Time time);

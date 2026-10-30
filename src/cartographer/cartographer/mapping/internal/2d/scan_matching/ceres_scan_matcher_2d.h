@@ -18,6 +18,7 @@
 #define CARTOGRAPHER_MAPPING_INTERNAL_2D_SCAN_MATCHING_CERES_SCAN_MATCHER_2D_H_
 
 #include <memory>
+#include <string>
 #include <vector>
 
 #include "Eigen/Core"
@@ -37,6 +38,26 @@ proto::CeresScanMatcherOptions2D CreateCeresScanMatcherOptions2D(
 // Align scans with an existing map using Ceres.
 class CeresScanMatcher2D {
  public:
+  struct HessianDiagnostics {
+    bool valid = false;
+    std::string failure_reason;
+    int num_residuals = 0;
+    int num_parameters = 0;
+    Eigen::Vector3d eigenvalues = Eigen::Vector3d::Zero();
+    Eigen::Vector3d weak_direction = Eigen::Vector3d::Zero();
+    double condition_number = 0.;
+  };
+
+  struct LocalObservabilityDiagnostics {
+    bool valid = false;
+    std::string failure_reason;
+    HessianDiagnostics measurement;
+    HessianDiagnostics objective;
+    double characteristic_length = 0.;
+    double scan_match_duration_ms = 0.;
+    double diagnostic_duration_ms = 0.;
+  };
+
   explicit CeresScanMatcher2D(const proto::CeresScanMatcherOptions2D& options);
   virtual ~CeresScanMatcher2D();
 
@@ -50,7 +71,8 @@ class CeresScanMatcher2D {
              const transform::Rigid2d& initial_pose_estimate,
              const sensor::PointCloud& point_cloud, const Grid2D& grid,
              transform::Rigid2d* pose_estimate,
-             ceres::Solver::Summary* summary) const;
+             ceres::Solver::Summary* summary,
+             LocalObservabilityDiagnostics* diagnostics = nullptr) const;
 
  private:
   const proto::CeresScanMatcherOptions2D options_;

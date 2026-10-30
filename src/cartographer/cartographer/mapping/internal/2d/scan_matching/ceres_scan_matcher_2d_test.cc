@@ -96,6 +96,54 @@ TEST_F(CeresScanMatcherTest, testOptimizeAlongXY) {
   TestFromInitialPose(transform::Rigid2d::Translation({-0.3, 0.3}));
 }
 
+TEST_F(CeresScanMatcherTest, DiagnosticsDoNotChangePoseEstimate) {
+  auto parameter_dictionary = common::MakeDictionary(R"text(
+      return {
+        occupied_space_weight = 1.,
+        translation_weight = 0.1,
+        rotation_weight = 1.5,
+        ceres_solver_options = {
+          use_nonmonotonic_steps = true,
+          max_num_iterations = 50,
+          num_threads = 1,
+        },
+      })text");
+  auto options = CreateCeresScanMatcherOptions2D(parameter_dictionary.get());
+  EXPECT_FALSE(options.enable_local_observability_diagnostics());
+
+  CeresScanMatcher2D baseline_matcher(options);
+  options.set_enable_local_observability_diagnostics(true);
+  CeresScanMatcher2D diagnostic_matcher(options);
+
+  const transform::Rigid2d initial_pose =
+      transform::Rigid2d::Translation({-0.3, 0.3});
+  transform::Rigid2d baseline_pose;
+  transform::Rigid2d diagnostic_pose;
+  ceres::Solver::Summary baseline_summary;
+  ceres::Solver::Summary diagnostic_summary;
+  CeresScanMatcher2D::LocalObservabilityDiagnostics diagnostics;
+
+  baseline_matcher.Match(initial_pose.translation(), initial_pose, point_cloud_,
+                         probability_grid_, &baseline_pose, &baseline_summary);
+  diagnostic_matcher.Match(initial_pose.translation(), initial_pose, point_cloud_,
+                           probability_grid_, &diagnostic_pose,
+                           &diagnostic_summary, &diagnostics);
+
+  EXPECT_DOUBLE_EQ(baseline_pose.translation().x(),
+                   diagnostic_pose.translation().x());
+  EXPECT_DOUBLE_EQ(baseline_pose.translation().y(),
+                   diagnostic_pose.translation().y());
+  EXPECT_DOUBLE_EQ(baseline_pose.rotation().angle(),
+                   diagnostic_pose.rotation().angle());
+  EXPECT_TRUE(diagnostics.valid) << diagnostics.failure_reason;
+  EXPECT_EQ(3, diagnostics.measurement.num_parameters);
+  EXPECT_EQ(3, diagnostics.objective.num_parameters);
+  EXPECT_TRUE(diagnostics.measurement.eigenvalues.allFinite());
+  EXPECT_TRUE(diagnostics.measurement.weak_direction.allFinite());
+  EXPECT_TRUE(diagnostics.objective.eigenvalues.allFinite());
+  EXPECT_GT(diagnostics.characteristic_length, 0.);
+}
+
 }  // namespace
 }  // namespace scan_matching
 }  // namespace mapping

@@ -18,7 +18,7 @@ package cartographer.mapping.scan_matching.proto;
 
 import "cartographer/common/proto/ceres_solver_options.proto";
 
-// NEXT ID: 10
+// NEXT ID: 11
 message CeresScanMatcherOptions2D {
   // Scaling parameters for each cost functor.
   double occupied_space_weight = 1;
@@ -28,4 +28,8 @@ message CeresScanMatcherOptions2D {
   // Configure the Ceres solver. See the Ceres documentation for more
   // information: https://code.google.com/p/ceres-solver/
   common.proto.CeresSolverOptions ceres_solver_options = 9;
+
+  // Collect post-solve local observability diagnostics for the 2D frontend.
+  // Disabled by default and does not affect the optimization problem.
+  bool enable_local_observability_diagnostics = 10;
 }
